@@ -4,7 +4,7 @@
 
 import numpy as np
 import holoviews as hv
-hv.extension("bokeh")
+# Note: call hv.extension("bokeh") in your notebook, not here
 
 # --- Best-fit parameters from Bayesian inference ---
 PARAMS = dict(
