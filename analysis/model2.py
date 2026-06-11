@@ -1,8 +1,9 @@
 # Model 2: Nutrient-dependent resource allocation
 # Solves steady-state equations for protein/mRNA fractions and elongation rate
-# across growth rates, for two regimes:
-#   - Co-limitation (E. coli): alpha=95, beta=2, eta=1, kappa=10, delta=130
-#   - Ribosomal mRNA limitation (S. cerevisiae): alpha=2, beta=3000, eta=0.3, kappa=0.01, delta=130
+# across growth rates, for three regimes:
+#   - Co-limitation (E. coli):              alpha=95,  beta=2,    eta=1,   kappa=10,  delta=130
+#   - Ribosomal mRNA limitation (S. cer.):  alpha=2,   beta=3000, eta=0.3, kappa=0.01,delta=130
+#   - tRNA limitation:                      alpha=95,  beta=0.01, eta=0.1, kappa=10,  delta=10
 #
 # Follows 20260226_model2_ND_realistic_Figs.ipynb
 #
@@ -17,21 +18,20 @@
 #   t     = charged tRNA proxy
 #
 # Usage in notebook:
-#   from model2 import (DEFAULT_ECOLI, DEFAULT_YEAST, DEFAULT_SHARED,
+#   from model2 import (DEFAULT_ECOLI, DEFAULT_YEAST, DEFAULT_TRNA, DEFAULT_SHARED,
 #                        solve_steady_state,
 #                        plot_total_mrna, plot_ribosome_fraction, plot_elongation_rate)
 #
-#   ecoli_data = solve_steady_state(DEFAULT_ECOLI, DEFAULT_SHARED,
-#                                   np.linspace(0.002, 0.9, 70))
-#   yeast_data = solve_steady_state(DEFAULT_YEAST, DEFAULT_SHARED,
-#                                   np.linspace(0.02, 0.7, 40), growth_min=0.1)
+#   ecoli_data = solve_steady_state(DEFAULT_ECOLI, DEFAULT_SHARED, np.linspace(0.002, 0.9, 70))
+#   yeast_data = solve_steady_state(DEFAULT_YEAST, DEFAULT_SHARED, np.linspace(0.02, 0.7, 40), growth_min=0.1)
+#   trna_data  = solve_steady_state(DEFAULT_TRNA,  DEFAULT_SHARED, np.linspace(0.002, 0.9, 70))
 #
-#   p1, p2 = plot_total_mrna(ecoli_data, yeast_data)
-#   bokeh.io.show(p1); bokeh.io.show(p2)
-#   p3, p4 = plot_ribosome_fraction(ecoli_data, yeast_data)
-#   bokeh.io.show(p3); bokeh.io.show(p4)
-#   p5, p6 = plot_elongation_rate(ecoli_data, yeast_data)
-#   bokeh.io.show(p5); bokeh.io.show(p6)
+#   p1, p2, p3 = plot_total_mrna(ecoli_data, yeast_data, trna_data)
+#   bokeh.io.show(p1); bokeh.io.show(p2); bokeh.io.show(p3)
+#   p4, p5, p6 = plot_ribosome_fraction(ecoli_data, yeast_data, trna_data)
+#   bokeh.io.show(p4); bokeh.io.show(p5); bokeh.io.show(p6)
+#   p7, p8, p9 = plot_elongation_rate(ecoli_data, yeast_data, trna_data)
+#   bokeh.io.show(p7); bokeh.io.show(p8); bokeh.io.show(p9)
 
 import numpy as np
 from scipy.optimize import root
@@ -58,6 +58,14 @@ DEFAULT_YEAST = dict(
     delta = 130,
 )
 
+DEFAULT_TRNA = dict(
+    alpha = 95,
+    beta  = 0.01,
+    eta   = 0.1,
+    kappa = 10,
+    delta = 10,
+)
+
 DEFAULT_SHARED = dict(
     alpha_c   = 0.05,   # transcription allocation: metabolic mRNA
     alpha_r   = 0.9,    # transcription allocation: ribosomal mRNA
@@ -71,6 +79,7 @@ COLOR_MRNA   = "#2B2B2B"   # near-black — total mRNA
 COLOR_ELONG  = "#BA3B54"   # red     — elongation rate
 COLOR_ECOLI  = "#4C72B0"   # blue
 COLOR_YEAST  = "#DD8452"   # orange
+COLOR_TRNA   = "#56899F"   # teal    — tRNA-limited
 
 
 # ---------------------------------------------------------------------------
@@ -233,58 +242,58 @@ def _base_fig(title, x_label, y_label, y_range=None):
     return p
 
 
-def plot_total_mrna(ecoli_data, yeast_data,
+def plot_total_mrna(ecoli_data, yeast_data, trna_data=None,
                     ecoli_label="E. coli (co-lim)",
-                    yeast_label="S. cerevisiae (ribo mRNA lim)"):
-    """Total mRNA fold change vs growth rate — E. coli and yeast side by side."""
-    ge = ecoli_data['growth']
-    gy = yeast_data['growth']
-    y_max = max(ecoli_data['mtot_fold'].max(), yeast_data['mtot_fold'].max()) * 1.1
+                    yeast_label="S. cerevisiae (ribo mRNA lim)",
+                    trna_label="tRNA-limited"):
+    """Total mRNA fold change vs growth rate — one panel per regime."""
+    datasets = [(ecoli_data, ecoli_label), (yeast_data, yeast_label)]
+    if trna_data is not None:
+        datasets.append((trna_data, trna_label))
 
-    p1 = _base_fig(f"{ecoli_label} — total mRNA",
-                   "growth rate (ND)", "mRNA fold change", y_range=[0, y_max])
-    p1.line(ge, ecoli_data['mtot_fold'], line_width=2.5, color=COLOR_MRNA)
+    y_max = max(d['mtot_fold'].max() for d, _ in datasets) * 1.1
+    plots = []
+    for (d, label) in datasets:
+        p = _base_fig(f"{label} — total mRNA",
+                      "growth rate (ND)", "mRNA fold change", y_range=[0, y_max])
+        p.line(d['growth'], d['mtot_fold'], line_width=2.5, color=COLOR_MRNA)
+        plots.append(p)
+    return tuple(plots)
 
-    p2 = _base_fig(f"{yeast_label} — total mRNA",
-                   "growth rate (ND)", "mRNA fold change", y_range=[0, y_max])
-    p2.line(gy, yeast_data['mtot_fold'], line_width=2.5, color=COLOR_MRNA)
 
-    return p1, p2
-
-
-def plot_ribosome_fraction(ecoli_data, yeast_data,
+def plot_ribosome_fraction(ecoli_data, yeast_data, trna_data=None,
                            ecoli_label="E. coli (co-lim)",
-                           yeast_label="S. cerevisiae (ribo mRNA lim)"):
-    """Ribosomal protein fraction vs growth rate — E. coli and yeast side by side."""
-    ge = ecoli_data['growth']
-    gy = yeast_data['growth']
-    y_max = max(ecoli_data['R_frac'].max(), yeast_data['R_frac'].max()) * 1.1
+                           yeast_label="S. cerevisiae (ribo mRNA lim)",
+                           trna_label="tRNA-limited"):
+    """Ribosomal protein fraction vs growth rate — one panel per regime."""
+    datasets = [(ecoli_data, ecoli_label), (yeast_data, yeast_label)]
+    if trna_data is not None:
+        datasets.append((trna_data, trna_label))
 
-    p3 = _base_fig(f"{ecoli_label} — ribosome fraction",
-                   "growth rate (ND)", "ribosomal protein fraction", y_range=[0, y_max])
-    p3.line(ge, ecoli_data['R_frac'], line_width=2.5, color=COLOR_RRNA)
+    y_max = max(d['R_frac'].max() for d, _ in datasets) * 1.1
+    plots = []
+    for (d, label) in datasets:
+        p = _base_fig(f"{label} — ribosome fraction",
+                      "growth rate (ND)", "ribosomal protein fraction", y_range=[0, y_max])
+        p.line(d['growth'], d['R_frac'], line_width=2.5, color=COLOR_RRNA)
+        plots.append(p)
+    return tuple(plots)
 
-    p4 = _base_fig(f"{yeast_label} — ribosome fraction",
-                   "growth rate (ND)", "ribosomal protein fraction", y_range=[0, y_max])
-    p4.line(gy, yeast_data['R_frac'], line_width=2.5, color=COLOR_RRNA)
 
-    return p3, p4
-
-
-def plot_elongation_rate(ecoli_data, yeast_data,
+def plot_elongation_rate(ecoli_data, yeast_data, trna_data=None,
                          ecoli_label="E. coli (co-lim)",
-                         yeast_label="S. cerevisiae (ribo mRNA lim)"):
-    """Elongation rate vs growth rate — E. coli and yeast side by side."""
-    ge = ecoli_data['growth']
-    gy = yeast_data['growth']
-    y_max = max(ecoli_data['elong_rate'].max(), yeast_data['elong_rate'].max()) * 1.1
+                         yeast_label="S. cerevisiae (ribo mRNA lim)",
+                         trna_label="tRNA-limited"):
+    """Elongation rate vs growth rate — one panel per regime."""
+    datasets = [(ecoli_data, ecoli_label), (yeast_data, yeast_label)]
+    if trna_data is not None:
+        datasets.append((trna_data, trna_label))
 
-    p5 = _base_fig(f"{ecoli_label} — elongation rate",
-                   "growth rate (ND)", "elongation rate", y_range=[0, y_max])
-    p5.line(ge, ecoli_data['elong_rate'], line_width=2.5, color=COLOR_ELONG)
-
-    p6 = _base_fig(f"{yeast_label} — elongation rate",
-                   "growth rate (ND)", "elongation rate", y_range=[0, y_max])
-    p6.line(gy, yeast_data['elong_rate'], line_width=2.5, color=COLOR_ELONG)
-
-    return p5, p6
+    y_max = max(d['elong_rate'].max() for d, _ in datasets) * 1.1
+    plots = []
+    for (d, label) in datasets:
+        p = _base_fig(f"{label} — elongation rate",
+                      "growth rate (ND)", "elongation rate", y_range=[0, y_max])
+        p.line(d['growth'], d['elong_rate'], line_width=2.5, color=COLOR_ELONG)
+        plots.append(p)
+    return tuple(plots)
